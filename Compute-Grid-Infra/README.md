@@ -1,6 +1,24 @@
+Table of Contents
+=================
+* [Compute grid in Azure](#compute-grid-in-azure)
+* [VM Infrastructure](#vm-infrastructure)
+  * [Network](#network)
+  * [Compute](#compute)
+  * [Storage](#storage)
+  * [Management](#management)
+* [Deployment steps](#deployment-steps)
+  * [Deploying using Azure CLI](#deploying-using-azure-cli)
+  * [Create the networking infrastructure and the jumpbox](#create-the-networking-infrastructure-and-the-jumpbox)
+  * [Optionally deploy the BeeGFS nodes](#optionally-deploy-the-beegfs-nodes)
+  * [Provision the compute nodes](#provision-the-compute-nodes)
+* [Running Applications](#running-applications)
+  * [Validating MPI](#validating-mpi)
+  * [Running a Pallas job with PBS Pro](#running-a-pallas-job-with-pbs-pro)
+
 # Compute grid in Azure
 
 These templates will build a compute grid made by a single master VMs running the management services, multiple VM Scaleset for deploying compute nodes, and optionally a set of nodes to run [BeeGFS](http://www.beegfs.com/) as a parallel shared file system. Ganglia is always setup by default on all VMs, and [PBS Pro](http://www.pbspro.org/) can optionally be setup for job scheduling.
+
 
 # VM Infrastructure
 The following diagram shows the overall Compute, Storage and Network infrastructure which is going to be provisioning within Azure to support running HPC applications.
@@ -27,7 +45,7 @@ Compute nodes are deployed thru VM Scale sets, made each by up to 100 VMs instan
 Depending on the workload to run on the cluster, there is a need to build a scalable file system. BeeGFS is proposed as an option, each storage node will host the storage and metadata services. Several Premium Disks are configured in RAID0 to store the metadata in addition to the real store.
 
 ### Management
-A dedicated VM (the master node) is used as a jumbbox, exposing an SSH endpoint, and hosting these services :
+A dedicated VM (the master node) is used as a jumpbox, exposing an SSH endpoint, and hosting these services :
 * __Ganglia__ metadata service and monitoring web site
 * __PBS Pro__ job scheduler
 * __BeeGFS__ management services
@@ -39,6 +57,18 @@ To build the compute grid, three main steps need to be executed :
 3. Provision the compute nodes
 
 _The OS for this solution is CentOS 7.2. All scripts have been tested only for that version._
+
+## Deploying using Azure CLI
+Azure CLI 2.0 preview setup instruction can be found [here](https://docs.microsoft.com/en-us/cli/azure/install-az-cli2)
+
+Below is an example on how to provision the templates. First you have to login with your credentials. If you have several subscriptions, make sure to make the one you want to deploy in the default. Then create a resource group providing the region and a name for it, and finally invoke the template passing your local parameter file. In the template URI make sure to use the RAW URI https://raw.githubusercontent.com/xpillons/azure-hpc/master/*** and not the github HTML link.
+
+    az login
+    az account set --subscription [subscriptionId]
+    az group create -l "West Europe" -n rg-master
+    az group deployment create -g rg-master --template-uri https://raw.githubusercontent.com/xpillons/azure-hpc/master/Compute-Grid-Infra/deploy-master.json --parameters @myparams.json
+
+
 
 ## Create the networking infrastructure and the jumpbox
 The template __deploy-master.json__ will provision the networking infrastructure as well as a master VM exposing an SSH endpoint for remote connection.   
@@ -128,4 +158,129 @@ After few minutes, once the provision succeed, you should see the new hosts adde
 If PBS Pro is used, SSH on the master and run the **pbsnodes -a** command to list all the registered nodes.
 
 **Your cluster is now ready to host applications and run jobs**
+
+# Running applications
+
+## Validating MPI
+Intel MPI and Infiniband are only available for A8/A9 and H16r instances. A default user named **hpcuser** has been created on the compute nodes and on the master node with passwordless access so it can be immediately used to run MPI across nodes.
+
+To begin, you need first to ssh on the master and then switch to the **hpcuser** user. From there, ssh one one of the compute nodes, and configure MPI by following the instructions from [here](https://docs.microsoft.com/en-us/azure/virtual-machines/virtual-machines-linux-classic-rdma-cluster#configure-intel-mpi)
+
+To run the 2 node pingpong test, execute the following command
+
+    mpirun -hosts <host1>,<host2> -ppn 1 -n 2 -env I_MPI_FABRICS=dapl -env I_MPI_DAPL_PROVIDER=ofa-v2-ib0 -env I_MPI_DYNAMIC_CONNECTION=0 IMB-MPI1 pingpong
+
+You should expect an output as the one below
+
+    #------------------------------------------------------------
+    #    Intel (R) MPI Benchmarks 4.1 Update 1, MPI-1 part
+    #------------------------------------------------------------
+    # Date                  : Thu Jan 26 02:16:14 2017
+    # Machine               : x86_64
+    # System                : Linux
+    # Release               : 3.10.0-229.20.1.el7.x86_64
+    # Version               : #1 SMP Tue Nov 3 19:10:07 UTC 2015
+    # MPI Version           : 3.0
+    # MPI Thread Environment:
+
+    # New default behavior from Version 3.2 on:
+
+    # the number of iterations per message size is cut down
+    # dynamically when a certain run time (per message size sample)
+    # is expected to be exceeded. Time limit is defined by variable
+    # "SECS_PER_SAMPLE" (=> IMB_settings.h)
+    # or through the flag => -time
+
+
+
+    # Calling sequence was:
+
+    # IMB-MPI1 pingpong
+
+    # Minimum message length in bytes:   0
+    # Maximum message length in bytes:   4194304
+    #
+    # MPI_Datatype                   :   MPI_BYTE
+    # MPI_Datatype for reductions    :   MPI_FLOAT
+    # MPI_Op                         :   MPI_SUM
+    #
+    #
+
+    # List of Benchmarks to run:
+
+    # PingPong
+
+    #---------------------------------------------------
+    # Benchmarking PingPong
+    # #processes = 2
+    #---------------------------------------------------
+           #bytes #repetitions      t[usec]   Mbytes/sec
+                0         1000         3.37         0.00
+                1         1000         3.40         0.28
+                2         1000         3.69         0.52
+                4         1000         3.39         1.13
+                8         1000         3.41         2.24
+               16         1000         3.38         4.51
+               32         1000         2.78        10.99
+               64         1000         2.79        21.90
+              128         1000         3.12        39.09
+              256         1000         3.34        73.13
+              512         1000         3.79       128.87
+             1024         1000         4.85       201.48
+             2048         1000         5.74       340.21
+             4096         1000         7.06       552.98
+             8192         1000         8.51       917.87
+            16384         1000        10.86      1438.11
+            32768         1000        16.55      1888.21
+            65536          640        28.15      2220.37
+           131072          320        53.47      2337.75
+           262144          160        84.07      2973.66
+           524288           80       148.77      3360.92
+          1048576           40       284.91      3509.84
+          2097152           20       546.43      3660.15
+          4194304           10      1077.75      3711.45
+
+
+    # All processes entering MPI_Finalize
+
+## Running a Pallas job with PBS Pro
+
+ssh on the master node and switch to the **hpcuser** user. Then change directory to home
+
+    sudo su hpcuser
+    cd
+
+create a shell script named **pingpong.sh** with the content listed below
+
+    #!/bin/bash
+
+    # set the number of nodes and processes per node
+    #PBS -l nodes=2:ppn=1
+
+    # set name of job
+    #PBS -N mpi-pingpong
+    source /opt/intel/impi/5.1.3.181/bin64/mpivars.sh
+
+    mpirun -env I_MPI_FABRICS=dapl -env I_MPI_DAPL_PROVIDER=ofa-v2-ib0 -env I_MPI_DYNAMIC_CONNECTION=0 IMB-MPI1 pingpong
+
+Then submit a job
+
+    qsub pingpong.sh
+
+The job output will be written in the current directory in files named **mpi-pingpong.e*** and **mpi-pingpong.o***
+
+The **mpi-pingpong.o*** file should contains the MPI pingpong output as shown above when doing the manual test.
+
+
 ____
+
+### Reporting bugs
+
+Please report bugs by opening an issue in the [GitHub Issue Tracker](https://github.com/xpillons/azure-hpc/issues)
+
+This project has adopted the [Microsoft Open Source Code of
+Conduct](https://opensource.microsoft.com/codeofconduct/). For more information
+see the [Code of Conduct
+FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or contact
+[opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional
+questions or comments.
